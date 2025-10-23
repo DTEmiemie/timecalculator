@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
@@ -13,7 +13,9 @@ import {
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
-import { Clock, Calculator, Trash2, Star } from 'lucide-react'
+import { Clock, Calculator, Trash2, Star, HelpCircle, Copy } from 'lucide-react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { useToast } from '@/hooks/use-toast'
 
 interface TimeEntry {
   id: string
@@ -34,6 +36,33 @@ export default function TimeCalculator() {
   const [points, setPoints] = useState<number | null>(null)
   const [showPoints, setShowPoints] = useState(false)
   const [formatMode, setFormatMode] = useState<'smart' | 'unordered' | 'normalize' | 'extract' | 'trim'>('smart')
+
+  // 自定义格式化模板
+  const DEFAULT_TEMPLATE = '总共时间为：{{TotalTime}}，有 {{points}} 待结算'
+  const [customTemplate, setCustomTemplate] = useState<string>(DEFAULT_TEMPLATE)
+  const templateRef = useRef<HTMLTextAreaElement | null>(null)
+  const { toast } = useToast()
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('timecalc.customTemplate')
+      if (saved) {
+        const OLD_DEFAULT = '总共时间为：{{TotalTime}}，总积分为{{points}}'
+        if (saved === OLD_DEFAULT) {
+          setCustomTemplate(DEFAULT_TEMPLATE)
+          localStorage.setItem('timecalc.customTemplate', DEFAULT_TEMPLATE)
+        } else {
+          setCustomTemplate(saved)
+        }
+      }
+    } catch {}
+  }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('timecalc.customTemplate', customTemplate)
+    } catch {}
+  }, [customTemplate])
 
   // 文本整理工具
   const pad2 = (n: number | string) => String(n).padStart(2, '0')
@@ -252,6 +281,100 @@ export default function TimeCalculator() {
     setShowPoints(true)
   }
 
+  // ===== 自定义格式化：渲染与复制 =====
+  const formatPointsNumber = (n: number) => {
+    const s = n.toFixed(2)
+    return s.replace(/\.00$/, '').replace(/(\.\d*[1-9])0$/, '$1')
+  }
+
+  const formatTotalTimeEn = (h: number, m: number) => {
+    const parts: string[] = []
+    if (h) parts.push(`${h}h`)
+    if (m) parts.push(`${m}m`)
+    if (parts.length === 0) return '0m'
+    return parts.join('')
+  }
+
+  const formatTotalTimeZh = (h: number, m: number) => {
+    const parts: string[] = []
+    if (h) parts.push(`${h}小时`)
+    if (m) parts.push(`${m}分钟`)
+    if (parts.length === 0) return '0分钟'
+    return parts.join('')
+  }
+
+  const totalValidRangeCount = useMemo(() => entries.filter(e => e.isValid).length, [entries])
+  const totalMinutesAll = useMemo(() => totalHours * 60 + totalMinutes, [totalHours, totalMinutes])
+
+  const renderTemplate = useMemo(() => {
+    const unknown = new Set<string>()
+    const mapping: Record<string, string | number> = {}
+    mapping['totaltime'] = formatTotalTimeEn(totalHours, totalMinutes)
+    mapping['TotalTime'] = formatTotalTimeZh(totalHours, totalMinutes)
+    mapping['hours'] = totalHours
+    mapping['minutes'] = totalMinutes
+    if (points !== null) {
+      const p = formatPointsNumber(points)
+      mapping['points'] = p
+      mapping['totalPoints'] = p
+      mapping['Points'] = `${p}积分`
+    }
+    mapping['rangeCount'] = totalValidRangeCount
+    mapping['totalMinutes'] = totalMinutesAll
+
+    const re = /\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}/g
+    const text = customTemplate.replace(re, (_m, key: string) => {
+      if (Object.prototype.hasOwnProperty.call(mapping, key)) {
+        return String(mapping[key])
+      } else {
+        unknown.add(key)
+        return `{{${key}}}`
+      }
+    })
+    return { text, unknown: Array.from(unknown) }
+  }, [customTemplate, totalHours, totalMinutes, points, totalValidRangeCount, totalMinutesAll])
+
+  const insertVariable = (name: string) => {
+    const token = `{{${name}}}`
+    const el = templateRef.current
+    if (!el) {
+      setCustomTemplate((t) => t + token)
+      return
+    }
+    const start = el.selectionStart ?? el.value.length
+    const end = el.selectionEnd ?? el.value.length
+    const next = customTemplate.slice(0, start) + token + customTemplate.slice(end)
+    setCustomTemplate(next)
+    setTimeout(() => {
+      el.focus()
+      const cursor = start + token.length
+      el.setSelectionRange(cursor, cursor)
+    }, 0)
+  }
+
+  const handleCopy = async () => {
+    const text = renderTemplate.text
+    try {
+      await navigator.clipboard.writeText(text)
+      toast({ title: '已复制到剪贴板' })
+    } catch {
+      try {
+        const area = document.createElement('textarea')
+        area.value = text
+        area.style.position = 'fixed'
+        area.style.left = '-9999px'
+        document.body.appendChild(area)
+        area.focus()
+        area.select()
+        document.execCommand('copy')
+        document.body.removeChild(area)
+        toast({ title: '已复制到剪贴板' })
+      } catch {
+        toast({ title: '复制失败，请手动选择复制' })
+      }
+    }
+  }
+
   return (
     <div className="min-h-screen bg-background p-4">
       <div className="max-w-4xl mx-auto space-y-6">
@@ -418,6 +541,64 @@ export default function TimeCalculator() {
                 </div>
                 <div className="text-xs text-muted-foreground bg-white/50 p-2 rounded">
                   计算示例：2h30m = 6 + 8 + 10×0.5 = 19积分
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {showPoints && points !== null && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                自定义格式化
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0" aria-label="使用提示">
+                      <HelpCircle className="h-4 w-4" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-80 text-xs leading-5">
+                    <div className="font-medium mb-1">使用提示</div>
+                    <div className="space-y-1 text-muted-foreground">
+                      <div>支持占位符（区分大小写）：</div>
+                      <div className="font-mono">{`{{totaltime}}`} / {`{{TotalTime}}`} / {`{{hours}}`} / {`{{minutes}}`}</div>
+                      <div className="font-mono">{`{{points}}`} / {`{{totalPoints}}`} / {`{{Points}}`}</div>
+                      <div className="font-mono">{`{{rangeCount}}`} / {`{{totalMinutes}}`}</div>
+                      <div>示例：总共时间为：{`{{TotalTime}}`}，总积分为{`{{points}}`}</div>
+                      <div>时长零项将被省略（例：3小时、15分钟）。</div>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap gap-2">
+                {['totaltime','TotalTime','points','Points','hours','minutes','rangeCount','totalMinutes'].map(k => (
+                  <Button key={k} size="sm" variant="outline" onClick={() => insertVariable(k)}>
+                    {`{{${k}}}`}
+                  </Button>
+                ))}
+              </div>
+              <Textarea
+                ref={templateRef}
+                value={customTemplate}
+                onChange={(e) => setCustomTemplate(e.target.value)}
+                className="min-h-20 font-mono"
+              />
+              <div>
+                <div className="text-sm text-muted-foreground mb-1">预览</div>
+                <div className="p-2 bg-muted rounded font-mono whitespace-pre-wrap break-words">
+                  {renderTemplate.text}
+                </div>
+                {renderTemplate.unknown.length > 0 && (
+                  <div className="text-xs text-muted-foreground mt-1">未知变量：{renderTemplate.unknown.join(', ')}</div>
+                )}
+                <div className="mt-2 flex justify-end">
+                  <Button onClick={handleCopy} size="sm">
+                    <Copy className="h-4 w-4 mr-1" />
+                    复制
+                  </Button>
                 </div>
               </div>
             </CardContent>
