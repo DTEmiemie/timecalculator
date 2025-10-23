@@ -4,6 +4,13 @@ import { useState, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { Clock, Calculator, Trash2, Star } from 'lucide-react'
@@ -26,6 +33,75 @@ export default function TimeCalculator() {
   const [totalMinutes, setTotalMinutes] = useState(0)
   const [points, setPoints] = useState<number | null>(null)
   const [showPoints, setShowPoints] = useState(false)
+  const [formatMode, setFormatMode] = useState<'smart' | 'unordered' | 'normalize' | 'extract' | 'trim'>('smart')
+
+  // 文本整理工具
+  const pad2 = (n: number | string) => String(n).padStart(2, '0')
+  const timeRangeRegex = /(\d{1,2})[：:](\d{1,2})\s*(?:-|–|—|~|～|to|至)\s*(\d{1,2})[：:](\d{1,2})/g
+
+  const cleanUnorderedList = (text: string) => {
+    return text
+      .split('\n')
+      .map((line) =>
+        line
+          // 任务列表 - [ ] / - [x]
+          .replace(/^\s*(?:[-*+•·]\s+\[(?:\s|x|X)\]\s+|[-*+•·]\s+)/, '')
+      )
+      .join('\n')
+  }
+
+  const normalizeTimeRanges = (text: string) => {
+    return text.replace(timeRangeRegex, (_m, a, b, c, d) => {
+      const sh = Math.min(23, parseInt(a))
+      const sm = Math.min(59, parseInt(b))
+      const eh = Math.min(23, parseInt(c))
+      const em = Math.min(59, parseInt(d))
+      return `${pad2(sh)}:${pad2(sm)} - ${pad2(eh)}:${pad2(em)}`
+    })
+  }
+
+  const extractTimeRangesLines = (text: string) => {
+    return text
+      .split('\n')
+      .map((line) => {
+        const m = Array.from(line.matchAll(timeRangeRegex))
+        if (m.length === 0) return ''
+        const [, a, b, c, d] = m[0]
+        const sh = Math.min(23, parseInt(a))
+        const sm = Math.min(59, parseInt(b))
+        const eh = Math.min(23, parseInt(c))
+        const em = Math.min(59, parseInt(d))
+        return `${pad2(sh)}:${pad2(sm)} - ${pad2(eh)}:${pad2(em)}`
+      })
+      .filter(Boolean)
+      .join('\n')
+  }
+
+  const removeEmptyLines = (text: string) => text.split('\n').filter((l) => l.trim() !== '').join('\n')
+
+  const formatInput = () => {
+    let text = inputText
+    switch (formatMode) {
+      case 'unordered':
+        text = cleanUnorderedList(text)
+        break
+      case 'normalize':
+        text = normalizeTimeRanges(text)
+        break
+      case 'extract':
+        text = extractTimeRangesLines(text)
+        break
+      case 'trim':
+        text = removeEmptyLines(text)
+        break
+      case 'smart':
+      default:
+        // 智能清理：去无序列表 -> 规范化 -> 仅保留时间 -> 去空行
+        text = removeEmptyLines(extractTimeRangesLines(normalizeTimeRanges(cleanUnorderedList(text))))
+        break
+    }
+    setInputText(text)
+  }
 
   const parseTimeLine = (line: string): TimeEntry | null => {
     const trimmedLine = line.trim()
@@ -67,20 +143,15 @@ export default function TimeCalculator() {
     const startMinutes = startHour * 60 + startMin
     const endMinutes = endHour * 60 + endMin
 
+    // 支持跨天：若结束时间小于开始时间，视为次日
+    let crossDay = false
+    let endTotalMinutes = endMinutes
     if (endMinutes < startMinutes) {
-      return {
-        id: Math.random().toString(36).substr(2, 9),
-        input: trimmedLine,
-        startTime: '',
-        endTime: '',
-        hours: 0,
-        minutes: 0,
-        isValid: false,
-        error: '结束时间不能早于开始时间'
-      }
+      crossDay = true
+      endTotalMinutes = endMinutes + 24 * 60
     }
 
-    const diffMinutes = endMinutes - startMinutes
+    const diffMinutes = endTotalMinutes - startMinutes
     const hours = Math.floor(diffMinutes / 60)
     const minutes = diffMinutes % 60
 
@@ -88,7 +159,7 @@ export default function TimeCalculator() {
       id: Math.random().toString(36).substr(2, 9),
       input: trimmedLine,
       startTime: `${String(startHour).padStart(2, '0')}:${String(startMin).padStart(2, '0')}`,
-      endTime: `${String(endHour).padStart(2, '0')}:${String(endMin).padStart(2, '0')}`,
+      endTime: `${crossDay ? '次日 ' : ''}${String(endHour).padStart(2, '0')}:${String(endMin).padStart(2, '0')}`,
       hours,
       minutes,
       isValid: true
@@ -213,6 +284,23 @@ export default function TimeCalculator() {
               onChange={(e) => setInputText(e.target.value)}
               className="min-h-32 font-mono"
             />
+            <div className="flex items-center gap-2">
+              <div className="w-56">
+                <Select value={formatMode} onValueChange={(v) => setFormatMode(v as any)}>
+                  <SelectTrigger className="h-9">
+                    <SelectValue placeholder="选择清理模式" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="smart">智能清理（推荐）</SelectItem>
+                    <SelectItem value="unordered">清理无序列表</SelectItem>
+                    <SelectItem value="normalize">规范化时间格式</SelectItem>
+                    <SelectItem value="extract">仅提取时间段</SelectItem>
+                    <SelectItem value="trim">移除空行</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button variant="secondary" onClick={formatInput}>格式化</Button>
+            </div>
             <div className="flex gap-2">
               <Button onClick={calculateTimes} className="flex-1">
                 计算时间
