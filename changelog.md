@@ -38,6 +38,11 @@
 - `src/app/page.tsx`
 - `src/app/layout.tsx`
 
+- feat: 更新网页标题与站点图标
+  - 标题改为“时间计算器”，并将 metadata 语言设置为 zh-CN
+  - 新增 `src/app/icon.svg`（时钟图标）作为 favicon
+  - 受影响文件：`src/app/layout.tsx`、`src/app/icon.svg`
+
 说明：
 - 智能清理的处理顺序：去无序列表 → 规范化时间 → 提取时间段 → 去空行。
 - 如需扩展更多清理策略（如提取全部时间段、排序去重、计算前自动清理），可在后续迭代中追加。
