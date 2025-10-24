@@ -16,6 +16,7 @@ import { Separator } from '@/components/ui/separator'
 import { Clock, Calculator, Trash2, Star, HelpCircle, Copy } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useToast } from '@/hooks/use-toast'
+import { Switch } from '@/components/ui/switch'
 
 interface TimeEntry {
   id: string
@@ -36,6 +37,9 @@ export default function TimeCalculator() {
   const [points, setPoints] = useState<number | null>(null)
   const [showPoints, setShowPoints] = useState(false)
   const [formatMode, setFormatMode] = useState<'smart' | 'unordered' | 'normalize' | 'extract' | 'trim'>('smart')
+  const [keepStaleWarning, setKeepStaleWarning] = useState(false) // 方案B：保留过期结果提示
+  const [autoUpdatePoints, setAutoUpdatePoints] = useState(false) // 方案C：自动更新积分
+  const [lastCalcMinutes, setLastCalcMinutes] = useState<number | null>(null)
 
   // 自定义格式化模板
   const DEFAULT_TEMPLATE = '总共时间为：{{TotalTime}}，有 {{points}} 待结算'
@@ -130,6 +134,16 @@ export default function TimeCalculator() {
         break
     }
     setInputText(text)
+    // 方案A：输入变更后默认隐藏积分，除非启用方案B/C
+    if (autoUpdatePoints) {
+      // 自动更新：稍后由 effect 重新计算
+    } else if (keepStaleWarning) {
+      // 保留结果但标记为过期（通过渲染逻辑显示提示）
+      setShowPoints(true)
+    } else {
+      setShowPoints(false)
+      setPoints(null)
+    }
   }
 
   const parseTimeLine = (line: string): TimeEntry | null => {
@@ -207,6 +221,11 @@ export default function TimeCalculator() {
     })
 
     setEntries(parsedEntries)
+    // 方案A：点击计算时间也视为输入变更
+    if (!autoUpdatePoints && !keepStaleWarning) {
+      setShowPoints(false)
+      setPoints(null)
+    }
   }
 
   useEffect(() => {
@@ -232,6 +251,10 @@ export default function TimeCalculator() {
 
   const removeEntry = (id: string) => {
     setEntries(entries.filter(entry => entry.id !== id))
+    if (!autoUpdatePoints && !keepStaleWarning) {
+      setShowPoints(false)
+      setPoints(null)
+    }
   }
 
   const calculatePoints = () => {
@@ -279,7 +302,45 @@ export default function TimeCalculator() {
     console.log('设置积分:', finalPoints)
     setPoints(finalPoints)
     setShowPoints(true)
+    setLastCalcMinutes(totalMinutesInTime)
   }
+
+  // 自动更新模式：总时长变化自动计算或隐藏
+  useEffect(() => {
+    if (!autoUpdatePoints) return
+    const totalMinutesInTime = totalHours * 60 + totalMinutes
+    if (totalMinutesInTime > 0) {
+      // 直接复用计算逻辑
+      let totalPoints = 6
+      const remainingMinutes = totalMinutesInTime - 60
+      if (remainingMinutes > 0) {
+        const fullHours = Math.floor(remainingMinutes / 60)
+        const extraMinutes = remainingMinutes % 60
+        for (let i = 1; i <= fullHours; i++) {
+          const hourPoints = 6 + i * 2
+          totalPoints += hourPoints
+        }
+        if (extraMinutes > 0) {
+          const nextHourPoints = 6 + (fullHours + 1) * 2
+          const partialPoints = nextHourPoints * (extraMinutes / 60)
+          totalPoints += partialPoints
+        }
+      }
+      const finalPoints = Math.round(totalPoints * 100) / 100
+      setPoints(finalPoints)
+      setShowPoints(true)
+      setLastCalcMinutes(totalMinutesInTime)
+    } else {
+      setPoints(null)
+      setShowPoints(false)
+      setLastCalcMinutes(null)
+    }
+  }, [autoUpdatePoints, totalHours, totalMinutes])
+
+  const isStale = useMemo(() => {
+    const totalMinutesInTime = totalHours * 60 + totalMinutes
+    return lastCalcMinutes !== null && lastCalcMinutes !== totalMinutesInTime
+  }, [lastCalcMinutes, totalHours, totalMinutes])
 
   // ===== 自定义格式化：渲染与复制 =====
   const formatPointsNumber = (n: number) => {
@@ -404,7 +465,17 @@ export default function TimeCalculator() {
             <Textarea
               placeholder="例如：&#10;09:30 - 17:45&#10;13:00 - 14:30&#10;18:20 - 21:00"
               value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
+              onChange={(e) => {
+                setInputText(e.target.value)
+                if (autoUpdatePoints) {
+                  // 自动模式下由 effect 处理
+                } else if (keepStaleWarning) {
+                  setShowPoints(true)
+                } else {
+                  setShowPoints(false)
+                  setPoints(null)
+                }
+              }}
               className="min-h-32 font-mono"
             />
             <div className="flex items-center gap-2">
@@ -516,6 +587,22 @@ export default function TimeCalculator() {
                     计算积分
                   </Button>
                 </div>
+                <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
+                  <div className="flex items-center justify-between border rounded p-2">
+                    <div>
+                      <div className="text-sm font-medium">保留过期结果提示</div>
+                      <div className="text-xs text-muted-foreground">输入变更时保留结果并提示“需重新计算”</div>
+                    </div>
+                    <Switch checked={keepStaleWarning} onCheckedChange={setKeepStaleWarning} />
+                  </div>
+                  <div className="flex items-center justify-between border rounded p-2">
+                    <div>
+                      <div className="text-sm font-medium">自动更新积分</div>
+                      <div className="text-xs text-muted-foreground">总时长变化时自动计算积分</div>
+                    </div>
+                    <Switch checked={autoUpdatePoints} onCheckedChange={setAutoUpdatePoints} />
+                  </div>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -531,6 +618,15 @@ export default function TimeCalculator() {
               </CardTitle>
             </CardHeader>
             <CardContent>
+              {keepStaleWarning && !autoUpdatePoints && showPoints && isStale && (
+                <div className="mb-3 p-2 rounded border border-yellow-300 bg-yellow-50 text-yellow-800 text-sm flex items-center justify-between">
+                  <span>输入已变更，需重新计算。</span>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant="secondary" onClick={calculatePoints}>重新计算</Button>
+                    <Button size="sm" variant="outline" onClick={() => { setShowPoints(false); setPoints(null) }}>清空积分</Button>
+                  </div>
+                </div>
+              )}
               <div className="text-center space-y-3">
                 <div className="text-3xl font-bold text-orange-600 font-mono">
                   {points} 积分
@@ -542,6 +638,9 @@ export default function TimeCalculator() {
                 <div className="text-xs text-muted-foreground bg-white/50 p-2 rounded">
                   计算示例：2h30m = 6 + 8 + 10×0.5 = 19积分
                 </div>
+              </div>
+              <div className="mt-3 flex justify-end">
+                <Button size="sm" variant="outline" onClick={() => { setShowPoints(false); setPoints(null) }}>清空积分</Button>
               </div>
             </CardContent>
           </Card>
